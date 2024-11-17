@@ -6,6 +6,7 @@ use tun_tap::{Iface, Mode};
 enum EtherType {
     IpV4 = 0x0800,
     IpV6 = 0x86DD,
+    Arp = 0x0806,
 }
 
 impl From<u16> for EtherType {
@@ -13,6 +14,7 @@ impl From<u16> for EtherType {
         match value {
             0x0800 => EtherType::IpV4,
             0x86DD => EtherType::IpV6,
+            0x0806 => EtherType::Arp,
             _ => panic!("EtherType Not Supported"),
         }
     }
@@ -23,14 +25,47 @@ struct EthernetHeader {
     dest_mac_address: [u8; 6],
     source_mac_address: [u8; 6],
     ether_type: EtherType,
+    pub payload: Vec<u8>,
 }
 
 impl EthernetHeader {
-    pub fn from_bytes(bytes: [u8; 14]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             dest_mac_address: bytes[..6].try_into().unwrap(),
             source_mac_address: bytes[6..12].try_into().unwrap(),
             ether_type: EtherType::from(u16::from_be_bytes([bytes[12], bytes[13]])),
+            payload: bytes[14..].to_vec(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IpV4Header {
+    version: u8,
+    packet_length: u16,
+    protocol: u8,
+    checksum: u16,
+    source_address: [u8; 4],
+    destination_address: [u8; 4],
+}
+
+impl IpV4Header {
+    pub fn from_ethernet_payload(payload: &[u8]) -> Self {
+        // The IP version is in the first 4 bits but considering network order is big endian,
+        // we get the "last" 4 bits instead
+        let version = payload[0] >> 4;
+        let packet_length = u16::from_be_bytes([payload[2], payload[3]]);
+        let protocol = payload[9];
+        let checksum = u16::from_be_bytes([payload[10], payload[11]]);
+        let source_address: [u8; 4] = payload[12..16].try_into().unwrap();
+        let destination_address = payload[16..20].try_into().unwrap();
+        Self {
+            version,
+            packet_length,
+            protocol,
+            checksum,
+            source_address,
+            destination_address,
         }
     }
 }
@@ -63,7 +98,8 @@ fn main() {
             continue;
         }
 
-        let eth_header = EthernetHeader::from_bytes(buffer[4..4 + 14].try_into().unwrap());
-        println!("{eth_header:x?}");
+        let eth_header = EthernetHeader::from_bytes(buffer[4..packet_length].try_into().unwrap());
+        let ip_header = IpV4Header::from_ethernet_payload(&eth_header.payload);
+        println!("{eth_header:x?}\n{ip_header:?}\nFull Data Length: {packet_length}");
     }
 }
